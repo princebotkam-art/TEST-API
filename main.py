@@ -31,7 +31,7 @@ API_URL = "http://147.135.212.197/crapi/st/viewstats"
 API_TOKEN = "R1BTQ0hBUzSAild8c2aWV3eYa1NpjVNIUpBzY1qCaWFHh5JUUpWIXQ=="
 TELEGRAM_BOT_TOKEN = "8073903913:AAEzVlCNlr-fnjQfOukl3sBdwvnJqepjYAY"
 TELEGRAM_CHANNEL_ID = "-1003868394296"
-OWNER_ID = 7
+OWNER_ID = 7013727523
 CHECK_INTERVAL = 15        # ⏱️ Har 15 sec baad fetch (jaldi OTP mile)
 BATCH_SIZE = 20            # 📦 Ek baar mein 20 records process
 MAX_RECORDS_PER_FETCH = 1000000000
