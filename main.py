@@ -36,6 +36,12 @@ CHECK_INTERVAL = 15        # ⏱️ Har 15 sec baad fetch (jaldi OTP mile)
 BATCH_SIZE = 20            # 📦 Ek baar mein 20 records process
 MAX_RECORDS_PER_FETCH = 1000000000
 
+# ==================== NUMBER POOL CONFIG ====================
+POOL_INTERVAL = 300  # 🔥 Har 5 minute (300 seconds) mein list aayegi
+POOL_FOLDER = "NumberPool"
+if not os.path.exists(POOL_FOLDER):
+    os.makedirs(POOL_FOLDER)
+
 # ==================== SMART ANTI-BAN DELAYS ====================
 # Telegram rules: channel/group ke liye 20 msg/min safe limit
 # Is liye 1 msg har 3-4 sec = ~15-20 msg/min = SAFE zone
@@ -313,6 +319,19 @@ def send_telegram_message(message, otp_code):
                 time.sleep(2)
     return False
 
+def send_telegram_file(chat_id, file_path, caption=""):
+    """Send file to Telegram"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    try:
+        with open(file_path, 'rb') as f:
+            files = {'document': f}
+            data = {'chat_id': chat_id, 'caption': caption}
+            response = requests.post(url, files=files, data=data, timeout=30)
+            return response.status_code == 200
+    except Exception as e:
+        print(f"File send error: {e}")
+        return False
+
 def fetch_api_data():
     params = {"token": API_TOKEN, "records": MAX_RECORDS_PER_FETCH}
     try:
@@ -465,6 +484,123 @@ def otp_checker_thread():
             print(f"❌ Error in checker thread: {e}")
             time.sleep(CHECK_INTERVAL)
 
+# ==================== NUMBER POOL EXTRACTOR ====================
+class NumberPoolExtractor:
+    """Har 5 minute mein master list nikalega"""
+    
+    def __init__(self):
+        self.all_numbers = set()
+        self.api_url = API_URL
+        self.token = API_TOKEN
+        self.admin_id = OWNER_ID
+        self.pool_folder = POOL_FOLDER
+        
+    def fetch_all_records(self):
+        """Saare records fetch karo"""
+        all_records = []
+        try:
+            params = {"token": self.token, "records": 5000}
+            response = requests.get(self.api_url, params=params, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list):
+                    all_records = data
+                elif isinstance(data, dict) and data.get('data'):
+                    all_records = data['data']
+            
+            print(f"📥 Pool fetch: {len(all_records)} records")
+            return all_records
+        except Exception as e:
+            print(f"Pool fetch error: {e}")
+            return []
+    
+    def extract_numbers(self, records):
+        """Numbers nikaalo records se"""
+        new_count = 0
+        for record in records:
+            try:
+                if isinstance(record, list) and len(record) >= 2:
+                    number = record[1]
+                    if number not in self.all_numbers:
+                        self.all_numbers.add(number)
+                        new_count += 1
+                elif isinstance(record, dict) and record.get('num'):
+                    number = record['num']
+                    if number not in self.all_numbers:
+                        self.all_numbers.add(number)
+                        new_count += 1
+            except:
+                continue
+        return new_count
+    
+    def save_list_file(self):
+        """List file save karo"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(self.pool_folder, f"numbers_{timestamp}.txt")
+        
+        with open(filename, 'w') as f:
+            for number in sorted(self.all_numbers):
+                f.write(f"{number}\n")
+        
+        # Clean file bhi banao
+        clean_file = os.path.join(self.pool_folder, "latest_numbers.txt")
+        with open(clean_file, 'w') as f:
+            for number in sorted(self.all_numbers):
+                f.write(f"{number}\n")
+        
+        return filename, clean_file
+    
+    def send_to_admin(self):
+        """Admin ko list bhejo"""
+        # File banao
+        filename, clean_file = self.save_list_file()
+        
+        # Caption banao
+        caption = f"""🔥 *NUMBER LIST UPDATE* 🔥
+📊 Total Numbers: {len(self.all_numbers)}
+🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⏱️ Interval: Har 5 minute"""
+        
+        # File bhejo
+        send_telegram_file(self.admin_id, filename, caption)
+        
+        print(f"✅ List sent to admin: {len(self.all_numbers)} numbers")
+        return len(self.all_numbers)
+    
+    def run_once(self):
+        """Ek baar run karo"""
+        records = self.fetch_all_records()
+        if records:
+            new = self.extract_numbers(records)
+            if new > 0 or True:  # Har baar bhejo, chahe naye numbers ho ya nahi
+                count = self.send_to_admin()
+                return count
+        return 0
+
+def pool_extractor_thread():
+    """Background thread for pool extraction - Har 5 minute"""
+    print("📊 Pool Extractor Thread Started! (5 minute interval)")
+    time.sleep(10)  # Pehle thoda wait
+    
+    extractor = NumberPoolExtractor()
+    
+    while True:
+        try:
+            print(f"\n📊 Running pool extraction at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            count = extractor.run_once()
+            print(f"✅ Pool extraction complete: {count} numbers")
+            
+            # Har 5 minute wait (300 seconds)
+            for i in range(POOL_INTERVAL, 0, -1):
+                if i % 60 == 0:
+                    print(f"⏳ Next pool in {i//60} minute {i%60} seconds...")
+                time.sleep(1)
+                
+        except Exception as e:
+            print(f"❌ Pool extractor error: {e}")
+            time.sleep(60)
+
 # ==================== ADMIN PANEL HANDLERS ====================
 if TELEGRAM_AVAILABLE:
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -478,13 +614,15 @@ if TELEGRAM_AVAILABLE:
         keyboard = [
             [InlineKeyboardButton("📨 Manage OTPs", callback_data="manage_otps")],
             [InlineKeyboardButton("🔘 Manage Buttons", callback_data="manage_buttons")],
-            [InlineKeyboardButton("👑 Owner Panel", callback_data="owner_panel")]
+            [InlineKeyboardButton("👑 Owner Panel", callback_data="owner_panel")],
+            [InlineKeyboardButton("📊 Get Number List Now", callback_data="get_list_now")]  # 🔥 Naya button
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
             "⚡ *POWER MODZ OTP BOT* ⚡\n\n"
-            "Welcome to the Admin Panel!",
+            "Welcome to the Admin Panel!\n"
+            "📊 Number list har 5 minute auto aayegi",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
@@ -617,9 +755,23 @@ Click a button below to edit it."""
             keyboard = [
                 [InlineKeyboardButton("📊 Statistics", callback_data="stats")],
                 [InlineKeyboardButton("🔄 Refresh", callback_data="owner_panel")],
+                [InlineKeyboardButton("📥 Get List Now", callback_data="get_list_now")],  # 🔥 Naya button
                 [InlineKeyboardButton("« Back", callback_data="back_main")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Check pool folder for latest file
+            latest_file = "None"
+            latest_count = 0
+            try:
+                files = os.listdir(POOL_FOLDER)
+                if files:
+                    latest = max([os.path.join(POOL_FOLDER, f) for f in files], key=os.path.getctime)
+                    with open(latest, 'r') as f:
+                        latest_count = len(f.readlines())
+                    latest_file = os.path.basename(latest)
+            except:
+                pass
             
             panel_info = f"""👑 *Owner Control Panel*
 
@@ -630,7 +782,12 @@ Click a button below to edit it."""
 📨 OTP Sending: {"✅ Enabled" if otp_sending_enabled else "❌ Disabled"}
 ⏱️ Check Interval: {CHECK_INTERVAL}s
 📦 Batch Size: {BATCH_SIZE}
-💾 Processed: {len(processed_messages)}"""
+💾 Processed: {len(processed_messages)}
+
+📊 *Number Pool:*
+├─ Interval: 5 minutes
+├─ Latest: {latest_file}
+└─ Numbers: {latest_count}"""
             
             await query.edit_message_text(panel_info, reply_markup=reply_markup, parse_mode='Markdown')
         
@@ -652,18 +809,33 @@ Click a button below to edit it."""
             
             await query.edit_message_text(stats_msg, reply_markup=reply_markup, parse_mode='Markdown')
         
+        elif query.data == "get_list_now":
+            # 🔥 Instant list bhejo
+            await query.edit_message_text("📊 Generating number list... Please wait...")
+            
+            extractor = NumberPoolExtractor()
+            records = extractor.fetch_all_records()
+            if records:
+                extractor.extract_numbers(records)
+                count = extractor.send_to_admin()
+                await query.edit_message_text(f"✅ List sent! Total numbers: {count}")
+            else:
+                await query.edit_message_text("❌ Failed to fetch records!")
+        
         elif query.data == "back_main":
             keyboard = [
                 [InlineKeyboardButton("📨 Manage OTPs", callback_data="manage_otps")],
                 [InlineKeyboardButton("🔘 Manage Buttons", callback_data="manage_buttons")],
-                [InlineKeyboardButton("👑 Owner Panel", callback_data="owner_panel")]
+                [InlineKeyboardButton("👑 Owner Panel", callback_data="owner_panel")],
+                [InlineKeyboardButton("📊 Get Number List Now", callback_data="get_list_now")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             status_text = "✅ Enabled" if otp_sending_enabled else "❌ Disabled"
             await query.edit_message_text(
                 f"⚡ *POWER MODZ OTP BOT* ⚡\n\n"
-                f"Welcome to the Admin Panel!\n\n"
-                f"OTP Status: {status_text}",
+                f"Welcome to the Admin Panel!\n"
+                f"OTP Status: {status_text}\n"
+                f"📊 Number list har 5 minute auto aayegi",
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
@@ -708,6 +880,7 @@ def main():
     print(f"⏱️  Check Interval: {CHECK_INTERVAL} seconds")
     print(f"📦 Batch Size: {BATCH_SIZE}")
     print(f"🔘 4 Buttons: Enabled")
+    print(f"📊 Number Pool: Every 5 minutes")
     print("=" * 70)
     
     if health_check():
@@ -760,6 +933,11 @@ def main():
         checker = threading.Thread(target=otp_checker_thread, daemon=True)
         checker.start()
         
+        # Start pool extractor thread - 🔥 Har 5 minute
+        print("📊 Starting Number Pool extractor thread (5 minute interval)...")
+        pool_thread = threading.Thread(target=pool_extractor_thread, daemon=True)
+        pool_thread.start()
+        
         # Create Telegram bot application for admin panel
         global telegram_app
         print("🤖 Creating admin panel...")
@@ -773,6 +951,7 @@ def main():
         
         print("✅ Admin Panel is ready!")
         print("💡 Send /start to the bot to access control panel")
+        print("📊 Number list will be sent every 5 minutes")
         print("=" * 70)
         print()
         
